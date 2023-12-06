@@ -1,0 +1,189 @@
+\-\--
+title: "570_Final_Project"
+author: "Ellis Arnold"
+date: "2023-11-06"
+output: html_document
+\-\--
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(sf)
+library(tidycensus)
+library(readxl)
+library(ggplot2)
+#install.packages("kableExtra")
+library(kableExtra)
+```
+
+## Getting the Data
+
+```{r, message=FALSE}
+#https://www.propublica.org/datastore/dataset/civilian-complaints-against-new-york-city-police-officers (complaint website)
+
+#import the data set
+complaints = read_csv("Complaints.csv")
+```
+
+This data comes from Pro Publica's Data Store. The data includes information about complaints filed against New York City Police Officers from 1985 to 2020. There are 12,056 unique complaints.
+
+```{r}
+#https://data.cityofnewyork.us/Public-Safety/Police-Precincts/78dh-3ptz (precinct location website)
+
+#import data set
+precincts = st_read("~/Desktop/MEJO570FA23/Final Project/Police Precincts")
+#ggplot() + geom_sf(data=precincts)
+```
+
+This shape file comes from a website called NYC Open Data. This website contained the name of each precinct, and its geographic location.
+
+```{r, message=FALSE}
+#new york population
+#https://www.prisonpolicy.org/origin/ny/police_precincts.html (from 2010 census, could not find 2020 census population data by police precinct)
+
+pop = read_excel("pop_by_precinct.xlsx")
+pop = pop %>% rename("total_pop_2010" = "Total Population (2010 Census)")
+```
+
+I scraped this data from the Prison Policy Initiative website. The two columns I used from the website's original table were the precinct number column and the census population of that precinct, from the 2010 Census. I used census data from this website because when I searched the census website for population data divided by police precinct, I could not find this level of specificity. Ideally, I would use average the precinct population for the Census years 1990, 2000, 2010 and 2020. Since the data spans over these multiple decades, this averaged population would be the most representative for the comparisons I want to make.
+
+## Data Preparation
+
+```{r}
+#number of unique complaints (based off of complaint_id)
+length(unique(complaints$complaint_id))
+
+#filter for only unique complaints
+complaints1 = complaints %>% distinct(complaint_id, .keep_all = TRUE)
+
+#more than halves the data!
+
+#renaming columns
+complaints1 = complaints1 %>% rename(top_level_cat_complaint = fado_type, 
+                                     specific_cat_complaint = allegation, 
+                                     CCRB_finding = board_disposition, 
+                                     original_contact = contact_reason, 
+                                     original_contact_outcome = outcome_description, 
+                                     individual_id = unique_mos_id)
+
+complaints1 = select(complaints1, -shield_no) #remove shield_no, redundant with individual_id
+complaints1
+
+#join the data sets
+complaints2 = left_join(precincts, complaints1, by="precinct")
+complaints2 = left_join(precincts, pop, by=c("precinct"="Precinct"))
+
+#clean new data set
+complaints2 = complaints2 %>% select(-shape_leng, -shape_area)
+```
+
+## Data Interview
+
+### How many people live in each precinct per complaint?
+
+```{r}
+precinct_group = complaints1 %>% group_by(precinct) %>% summarise(sum = n())
+precinct_group = left_join(precinct_group, pop, by=c("precinct"="Precinct"))
+precinct_group = precinct_group %>% filter(precinct>0) %>% filter(precinct<150) #take out bogus precincts (precincts that don't exist or are entered as NA)
+
+# How many people live in this precinct per complaint?
+precinct_group1 = precinct_group %>% mutate(complaints_by_pop = total_pop_2010 / sum) #how many people / complaint
+                                                                                      #lower numbers are worse (there are more complaints with fewer people)
+precinct_group1.5 = left_join(complaints2, precinct_group1, by=join_by("precinct"))
+precinct_group1.5
+```
+
+### What is the spread of complaints / population?
+
+```{r}
+summary(precinct_group1$complaints_by_pop) # precinct with 3.1 people per complaint is Central Park District (no houses here), next smallest is 138.5 people per complaint 
+
+precinct_group1.5 = precinct_group1.5 %>% filter(complaints_by_pop>3.1) # remove this outlier
+```
+
+### Which precincts have higher volumes of complaints per population?
+```{r}
+ggplot() + 
+  geom_sf(data=precinct_group1.5, 
+          aes(fill=complaints_by_pop)) +theme_minimal() + viridis::scale_fill_viridis(direction=1)
+```
+This map is of New York City divided by its 77 police precincts. The visual has accounted for the number of complaints filed in each precinct and its population. The areas of the map with lighter colors represent areas with fewer complaints per person. Darker areas mean there were higher numbers of complaints, after accounting for population. Interestingly, majority of the map is dark, with a few precincts standing out as having low numbers of complaints. The two precincts with the fewest amount of complaints per person are northeastern Queens and Borough Park, Brooklyn. Could these neighborhoods be considered "safer" than others? Is police training more thorough for these units? 
+
+
+### How many NYPD officers have at least one complaint filed against them?
+
+```{r}
+#individuals with a complaint against them
+x = complaints1 %>% group_by(individual_id) %>% summarise(sum = n()) %>% arrange(desc(sum))
+nrow(x)
+```
+
+3,631 NYPD officers have had a complaint filed against them in the time between 1985 and 2020. In 1985 the NYPD employed 26,000 uniformed officers. This number has fluctuated over the years; at the time this data set was last updated the number of NYPD officers had reached 36,000. \*\*\*
+
+### How many NYPD officers have had more than one complaint filed against them.
+
+```{r}
+num_officers_w_complaints = nrow(complaints1 %>% group_by(individual_id) %>% summarise(sum = n()))
+num_officers_w_more_than_one = nrow(complaints1 %>% group_by(individual_id) %>% summarise(sum=n()) %>% filter(sum>1))
+
+#of 3631 police officers with complaints, 70% have more than one complaint
+num_officers_w_more_than_one/num_officers_w_complaints
+```
+
+70% of NYPD officers who received one complaint, later received at least one additional complaint during their time serving. Officers who have violated a rule are likely to do it again. 
+
+### Who is the officer with the most complaints?
+
+```{r}
+more_than_1_complaint = complaints1 %>% group_by(individual_id) %>% summarise(sum=n()) %>% filter(sum>1) %>% arrange(desc(sum))
+
+complaints1%>%filter(individual_id==18589)%>%arrange(year_received)
+```
+
+Christophe McCormack has climbed in rank throughout his career despite having 26 complaints filed against him in 25 years. Since his first complaint in 1990, he has climbed 7 ranks from police officer to Inspector. His 26th complaint in 2015 solidified his lead as the NYPD officer with the most complaints.
+
+### What is the outcome of a complaint?
+
+```{r}
+complaints1 %>% group_by(CCRB_finding) %>% summarise(sum=n())
+
+data <- data.frame(Name=c("Exonerated", "Sustained", "Unsustained"), Amount=c(4318, 2100, 5638), Percent = c("35.8% of Total", "17.4% of Total", "46.7% of Total"))
+ggplot(data, aes(x=reorder(Name,-Amount), y=Amount, fill=Amount, label=Percent)) + geom_bar(stat="identity") +theme_minimal() + xlab(" ") + ylab(" ") + labs(title="The Outcome of Each Filed Complaint") + scale_fill_gradient(low="blue") +theme(legend.position = "none") + geom_text(aes(label = Percent), vjust=5) + theme(text=element_text(size=16,  family="serif"))
+  
+```
+
+Only 17.4% of all complaints received were sustained, meaning the officer was found to have violated a rule. The remaining 82.6% of reported complaints were either inconclusive or exonerated, meaning the police officer was determined to not have violated a rule, and thus no further action was taken.
+
+### What is the punishment for police officers?
+
+```{r}
+#https://www.nyc.gov/site/ccrb/complaints/complaint-process/police-discipline.page
+complaints1 %>% group_by(CCRB_finding) %>% summarise(sum=n()) %>% filter(sum<4318)
+```
+939 complaints, that had previously been sustained, resulted in charges being brought to the offending police officer. This is just 7% of the initial number of complaints that were filed. After an officer has been charged, a trial begins at NYPD Headquarters. If the officer has been found guilty, consequences can include loss of vacation days, suspension, or termination from the NYPD. The remainder, and majority, of sustained complaints had less severe consequences, such as required training, policy reminders, or no repercussion recommendation at all. It is unknown if/how many police officers either suspended or terminated due to receiving a complaint. (**Side note: for future story would look into this further. Were people let go becuase of their actions?)
+
+
+### What is the racial breakdown of complaints received (person accusing)?
+
+```{r}
+complaints_race = complaints1 %>% group_by(complainant_ethnicity) %>% summarise(sum=n()) %>% filter(!is.na(complainant_ethnicity), complainant_ethnicity != "Unknown", complainant_ethnicity !="Refused")
+
+total_known_race_complaints = sum(complaints_race$sum)
+complaints_race = complaints_race %>% mutate(prop = sum/total_known_race_complaints)
+
+complaints_race %>%
+  kbl() %>%
+  kable_styling()
+```
+
+Approximately 61% of complaints received were filed by an African-American person. In comparison, the average percent of New York City's population that was black during this time was 23%. Black people are overrepresented in the number of complaints. The two explanations for this are: black people are receiving a higher proportion of unjust policing, or black people report unjust policing more often than any other race. (\*\*Side note, for a complete story I would construct a confidence interval to determine if the percent 61 is significant or not. Would this number ever occur naturally given that black people are treated unfairly in the same proportion all other races are?)
+
+### What is the racial breakdwon of offending officers?
+```{r}
+officer_race = complaints1 %>% distinct(individual_id, .keep_all=TRUE) %>%group_by(mos_ethnicity) %>% summarise(sum=n())
+officer_race
+```
+
