@@ -1,2 +1,4 @@
 # MEJO-570-Final
-Final Project for MEJO 570 (police complaints)
+For my final project for MEJO 570, I looked at complaints filed against NYPD officers from 1985 to 2020. I downloaded the complaints data from ProPublica's Data Store. This data set had 12,056 unique complaints. Included in my data folder is a column breakdown for this data set. The second data set I used in my RMD was a shapefile for NYC police precincts. I chose this shapefile's level of specificity because the complaints data incuded the precinct it occurred in. Finally, I scraped NYC precinct population data from the 2010 census to join with the shapefile. I pulled this past census data from the Prison Policy Initiative website because the census website did not have population data by precinct. Ideally, I would use average the precinct population for the Census years 1990, 2000, 2010 and 2020; since the complaints data spans over these multiple decades, this averaged population would be the most representative for the comparisons I want to make. 
+
+
